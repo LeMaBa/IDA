@@ -1,0 +1,1649 @@
+---
+title: "Untitled"
+output: html_document
+Author: 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Description of Case Study
+In this case study, we work in a chain of auto repair shops in Bavaria. we operate workshops in the cities of "Augsburg", "Ingolstadt", "Regensburg", "Würzburg", "Bamberg", "Bayreuth", "Aschaffenburg", "Erlangen", "Rosenheim" and "Landshut". We have to calculate the number of spare parts for the coming calendar year. Analyze the data from the last three years (2014 - 2016 inclusive).We recommend to each repair shop on how much of which part should be delivered to each repair shop.
+
+## Data import and preparation
+
+### List of important datasets
+1. Geodaten (Geographical data)
+2. Zulassung (Registration) datatables
+3. Fahrzeug (Vehicles) datatables
+4. Bestandteile (Components) 
+5. Komponente (Components) datatables
+6. Bestandteile_Komponente (Components) datatables
+7. Einzelteil (Parts)
+
+
+```{r}
+rm(list = ls())
+.rs.restartR()
+```
+
+# Install Library 
+```{r, eval=FALSE, echo=TRUE, error=FALSE, warning=FALSE}
+
+if(!require(install.load)){
+  install.packages("install.load")
+  library(install.load)
+}
+install_load("tidyverse","shiny","leaflet","shinydashboard","lubridate","ggmap","ggrepel","stringr","data.table")
+```
+
+## library memory limit
+```{r}
+install.packages("devtools", dependencies = TRUE)
+devtools::install_github("krlmlr/ulimit")
+ulimit::memory_limit(2000)
+```
+
+#### Functions for preparing and importing data
+```{r message=FALSE, warning=FALSE}
+
+checkfunction1 <- function(dataframe) {
+  # Vergleicht Seriennummer mit Hersteller und Werksnummer und bessert diese bei Unstimmigkeiten aus
+  splits = str_split_fixed(dataframe[[1]], "-", n = 4)
+
+  dataframe_new <- subset(dataframe, ifelse(Herstellernummer == splits[, 2] & Werksnummer == splits[, 3], TRUE, FALSE))
+  
+  return(dataframe_new)
+}
+
+checkfunction2 <- function(dataframe) {
+  # Vergleicht Seriennummer mit Hersteller und Werksnummer und bessert diese bei Unstimmigkeiten aus
+  splits = str_split_fixed(dataframe[[2]], "-", n = 4)
+
+  dataframe_new <- subset(dataframe, ifelse(Herstellernummer == splits[, 2] & Werksnummer == splits[, 3], TRUE, FALSE))
+  
+  return(dataframe_new)
+}
+
+
+Correctfunction <- function(dataframe){
+   if( !is.na(as.numeric(substr(dataframe[[1]], 1,2))) ){
+                ifelse(substr(dataframe[[1]], 4, 6) == substr(dataframe[[1]], 8, 10), dataframe[[1]],paste0(substr(dataframe[[1]], 1, 7),substr(dataframe[[1]], 4, 6), substr(dataframe[[1]], 11, nchar(dataframe[[1]]))))
+        }else{
+                ifelse(substr(dataframe[[1]], 3, 5) == substr(dataframe[[1]], 7, 9), dataframe[[1]],paste0(substr(dataframe[[1]], 1, 6),substr(dataframe[[1]], 3, 5), substr(dataframe[[1]], 10, nchar(dataframe[[1]]))))
+        }
+  splits = str_split_fixed(dataframe[[1]], "-", n = 4)
+  Dataframe_new <- subset(dataframe, ifelse(Herstellernummer == splits[, 2] & Werksnummer == splits[, 3], TRUE, FALSE))
+  
+  return(dataframe_new)
+}
+```
+
+
+# Import and prepare data
+
+##Geographical Data
+```{r}
+#find the delimiter, ";"
+Delimiter <- reader::get.delim("Data/Geodaten/Geodaten_Gemeinden_v1.2_2017-08-22_TrR.csv")
+Geographical_Workshops<-read_csv2("Data/Geodaten/Geodaten_Gemeinden_v1.2_2017-08-22_TrR.csv", na="NA") %>%
+  filter(Gemeinde %in% c("AUGSBURG","INGOLSTADT","REGENSBURG","WUERZBURG","BAMBERG","BAYREUTH","ASCHAFFENBURG","ERLANGEN","ROSENHEIM","LANDSHUT") ) %>% 
+  select(-1, -2)
+
+```
+
+## Registration tables 
+```{r}
+#Delimiter is ";"
+Delimiter <- reader::get.delim("Data/Zulassungen/Zulassungen_alle_Fahrzeuge.csv")
+Registration=read_csv2("Data/Zulassungen/Zulassungen_alle_Fahrzeuge.csv")
+
+# only  vehicles were repaired in cities Augsburg, Ingolstadt, Regensburg, Würzburg, Bamberg, Bayreuth, Aschaffenburg, Erlangen, Rosenheim and Landshut 
+
+Registration_Workshops=Registration %>% 
+  inner_join(Geographical_Workshops,by=c("Gemeinden"="Gemeinde")) %>%
+  #filter(year(Zulassung) %in% c(2014, 2015, 2016)) %>% 
+  select (-1)
+
+#delet tibble Zulassungen
+rm(Registration,Geographical_Workshops)
+```
+
+## Import Faulty Vehicle Tables
+```{r}
+#Import Faulty Data for Fahrzeuge_OEM1_Typ11 
+Delim <- reader::get.delim("Data/Fahrzeug/Fahrzeuge_OEM1_Typ11.csv")
+Vehicles_OEM1_Typ11= read_csv("Data/Fahrzeug/Fahrzeuge_OEM1_Typ11.csv", na="NA")
+
+#prepare data
+Vehicles_Typ11=Vehicles_OEM1_Typ11 %>%
+  mutate(Production_Date= as.POSIXct(Produktionsdatum,format="%Y-%m-%d"),
+         Faulty_Date = as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d")) %>%
+  filter(Production_Date >= as.Date("2014-01-01"),Production_Date <=as.Date("2016-12-31")) %>%
+  filter(Fehlerhaft == 1) %>% 
+  select("ID_Fahrzeug","Production_Date","Herstellernummer","Werksnummer","Fehlerhaft","Faulty_Date","Fehlerhaft_Fahrleistung") %>%
+  #select(-1, -2,3,10,5:7,11,9) %>%
+  checkfunction1()
+
+#Change colnames
+colnames(Vehicles_Typ11)=c("ID_Vehicle","Production_Date","Manufacturer_Number","Factory_Number","Faulty","Faulty_Date","Faulty_Performance")
+
+#delete Vehicles_OEM1_Typ11
+rm(Vehicles_OEM1_Typ11)
+
+###########Fahrzeuge_OEM1_Typ12########
+#######################################
+
+#Import Fahrzeuge_OEM1_Typ12
+Delimiter <- reader::get.delim("Data/Fahrzeug/Fahrzeuge_OEM1_Typ12.csv")
+Vehicles_OEM1_Typ12 <- read_csv2("Data/Fahrzeug/Fahrzeuge_OEM1_Typ12.csv", na="NA")
+                
+#Prepare data  
+Vehicles_Typ12=Vehicles_OEM1_Typ12 %>% 
+  filter(Fehlerhaft == 1) %>% 
+  filter(Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>%
+  select("ID_Fahrzeug","Produktionsdatum","Herstellernummer","Werksnummer","Fehlerhaft","Fehlerhaft_Datum","Fehlerhaft_Fahrleistung") %>%
+  checkfunction1()
+colnames(Vehicles_Typ12)=c("ID_Vehicle","Production_Date","Manufacturer_Number","Factory_Number","Faulty","Faulty_Date","Faulty_Performance")
+
+# delete Fahrzeuge_OEM1_Typ12
+rm(Vehicles_OEM1_Typ12)
+
+###########Fahrzeuge_OEM1_Typ21########
+#######################################
+
+# Import Fahrzeuge_OEM2_Typ21
+Vehicles_OEM2_Typ21= read_csv("Data/Fahrzeug/Fahrzeuge_OEM2_Typ21.csv", na="NA")
+
+#Prepare data
+Vehicles_Typ21=Vehicles_OEM2_Typ21 %>% 
+ mutate(origin= as.POSIXct(origin,format="%d-%m-%Y"),
+        Faulty_Date = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d")),
+        Production_Date=as.Date(Produktionsdatum_Origin_01011970-1, origin = origin)) %>%
+  filter(Production_Date >= as.Date("2014-01-01"),Production_Date <=as.Date("2016-12-31")) %>%
+  filter(Fehlerhaft == 1) %>% 
+  select("ID_Fahrzeug","Production_Date","Herstellernummer","Werksnummer","Fehlerhaft","Faulty_Date","Fehlerhaft_Fahrleistung") %>%
+  #select(-1, -2,3,10,5:7,11,9) %>%
+  checkfunction1()
+
+#Change colnames
+colnames(Vehicles_Typ21)=c("ID_Vehicle","Production_Date","Manufacturer_Number","Factory_Number","Faulty","Faulty_Date","Faulty_Performance")
+
+#delete Fahrzeuge_OEM1_Typ21
+rm(Vehicles_OEM2_Typ21)
+
+############Fahrzeuge_OEM2_Typ22########
+#######################################
+
+#Import Fahrzeuge_OEM2_Typ22
+Vehicles_OEM2_Typ22= read_csv2("Data/Fahrzeug/Fahrzeuge_OEM2_Typ22.csv", na="NA")
+ 
+#convert origin column to date format
+Vehicles_OEM2_Typ22$origin=as.POSIXct(Vehicles_OEM2_Typ22$origin,format="%d-%m-%Y")
+# define new column for production date
+Vehicles_OEM2_Typ22$Produktionsdatum=as.Date(Vehicles_OEM2_Typ22$Produktionsdatum_Origin_01011970-1, origin = Vehicles_OEM2_Typ22$origin)
+
+#Prepare Fahrzeuge_OEM2_Typ22
+Vehicles_Typ22=Vehicles_OEM2_Typ22 %>% 
+  mutate(origin= as.POSIXct(origin,format="%d-%m-%Y"),
+        Faulty_Date = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d")),
+        Production_Date=as.Date(Produktionsdatum_Origin_01011970-1, origin = origin)) %>%
+  filter(Production_Date >= as.Date("2014-01-01"),Production_Date <=as.Date("2016-12-31")) %>%
+  filter(Fehlerhaft == 1) %>% 
+  select("ID_Fahrzeug","Production_Date","Herstellernummer","Werksnummer","Fehlerhaft","Faulty_Date","Fehlerhaft_Fahrleistung") %>%
+  checkfunction1()
+
+#Change colnames
+colnames(Vehicles_Typ22)=c("ID_Vehicle","Production_Date","Manufacturer_Number","Factory_Number","Faulty","Faulty_Date","Faulty_Performance")
+
+#delete Fahrzeuge_OEM1_Typ21
+rm(Vehicles_OEM2_Typ22)
+
+#Faulty Vehicle Table
+Faulty_Vehicles=bind_rows(Vehicles_Typ11,Vehicles_Typ12,Vehicles_Typ21,Vehicles_Typ22)
+
+rm(Vehicles_Typ11,Vehicles_Typ12,Vehicles_Typ21,Vehicles_Typ22)
+```
+
+
+### Combination of Vehlicle_Faulty and Registration table for faulty Vehicles
+```{r}
+Registration_Vehicle_Faulty <- inner_join(Registration_Workshops, Faulty_Vehicles, c("IDNummer" = "ID_Vehicle"))%>%
+        rename(ID_Vehicle = IDNummer,City=Gemeinden,Registration=Zulassung)%>%
+        select(ID_Vehicle, City, Registration, Faulty)
+
+rm(Registration_Workshops,Faulty_Vehicles)
+```
+
+###################################################################################
+#Components:List of all Components for each Vehicles
+```{r}
+Component_Typ11=read_csv2("Data/Fahrzeug/Bestandteile_Fahrzeuge_OEM1_Typ11.csv")
+Component_Typ12=read_csv2("Data/Fahrzeug/Bestandteile_Fahrzeuge_OEM1_Typ12.csv")
+Component_Typ21=read_csv2("Data/Fahrzeug/Bestandteile_Fahrzeuge_OEM2_Typ21.csv")
+Component_Typ22=read_csv2("Data/Fahrzeug/Bestandteile_Fahrzeuge_OEM2_Typ22.csv")
+
+Component_Vehicles=bind_rows(Component_Typ11,Component_Typ12,Component_Typ21,Component_Typ22)%>%
+  select(-1)
+rm(Component_Typ11,Component_Typ12,Component_Typ21,Component_Typ22)
+```
+
+#Components: 
+             ID_Motor--> started with K1...(DI for Diesel)
+             ID_Seats--> started with K2...
+             ID_Gears--> started with K3...
+             ID_VehiclesBody--> started with K4...
+
+### K1BE1: Motor ComponentsPart 
+```{r message=FALSE, warning=FALSE}
+#separated with ";"
+Delim <- reader::get.delim("Data/Komponente/Bestandteile_Komponente_K1BE1.csv")
+ComponentsPart_K1BE1=read_csv2("Data/Komponente/Bestandteile_Komponente_K1BE1.csv") %>% 
+  select(6,2:5) 
+
+Delim <- reader::get.delim("Data/Komponente/Komponente_K1BE1.csv")
+Faulty_K1BE1 = read_csv("Data/Komponente/Komponente_K1BE1.csv")%>%
+   mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")))%>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  select(-X1,-X1_1,-Produktionsdatum_Origin_01011970,-origin)
+
+
+K1BE1 = Faulty_K1BE1%>%
+  inner_join(Component_Vehicles, c("ID_Motor"="ID_Motor"))%>%
+  select(-ID_Karosserie, -ID_Schaltung, -ID_Sitze)%>%
+  inner_join(ComponentsPart_K1BE1,c("ID_Motor"="ID_K1BE1"))%>%
+  select(ID_Fahrzeug,ID_Motor, Fehlerhaft, ID_T1, ID_T2, ID_T3, ID_T4)%>%
+  rename(ID_Component = ID_Motor)
+
+#delete unnecessary data
+rm(Faulty_K1BE1,ComponentsPart_K1BE1)
+
+# We need to import Einzelteil (1-4)
+
+Einzelteil1 <- read_file("Data/Einzelteil/Einzelteil_T01.txt")%>%
+  str_replace_all(.," \\| \\| ", ";")%>%
+  str_replace_all(.," ","\n")%>%
+  fread(text= .)%>%
+  as_tibble()%>%
+  mutate(ID_T01 = coalesce(ID_T01.x, ID_T01.y),
+         Produktionsdatum = coalesce(Produktionsdatum.x, Produktionsdatum.y),
+         Produktionsdatum = as.Date(as.POSIXct(Produktionsdatum, "%Y-%m-%d")),
+         Herstellernummer = coalesce(Herstellernummer.x, Herstellernummer.y),
+         Werksnummer = coalesce(Werksnummer.x, Werksnummer.y),
+         Fehlerhaft = coalesce(Fehlerhaft.x, Fehlerhaft.y),
+         Fehlerhaft_Datum = coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+         Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d")),
+         Fehlerhaft_Fahrleistung = coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y)) %>%
+    select(17:23)%>%
+    filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  checkfunction1()
+
+# Importing Einzelteil2
+Einzelteil2 <- read_file("Data/Einzelteil/Einzelteil_T02.txt")%>%
+  str_replace_all(., "  ", ";")%>%
+  str_replace_all(., "\t" ,"\n")%>%
+  fread(text= .)%>%
+  as_tibble()%>%
+  mutate(ID_T02 = coalesce(ID_T02.x, ID_T02.y),
+         Produktionsdatum = coalesce(Produktionsdatum.x, Produktionsdatum.y),
+         Produktionsdatum = as.Date(as.POSIXct(Produktionsdatum, "%Y-%m-%d")),
+         Herstellernummer = coalesce(Herstellernummer.x, Herstellernummer.y),
+         Werksnummer = coalesce(Werksnummer.x, Werksnummer.y),
+         Fehlerhaft = coalesce(Fehlerhaft.x, Fehlerhaft.y),
+         Fehlerhaft_Datum = coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+         Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d")),
+         Fehlerhaft_Fahrleistung = coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y)) %>%
+    select(17:23)%>%
+    filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  checkfunction1()
+
+#importing Einzelteil3
+Einzelteil3 <- read_file("Data/Einzelteil/Einzelteil_T03.txt")%>%
+  str_replace_all(., "\\|", ";")%>%
+  str_replace_all(., "\v" ,"\n")%>%
+  fread(text= .)%>%
+  as_tibble()%>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+         Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  select(-1, -2, -9, -10)%>%
+    filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  checkfunction1()
+
+#importing Einzelteil4
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T04.csv")
+Einzelteil4 <- read_csv2("Data/Einzelteil/Einzelteil_T04.csv")%>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+         Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  select(-1, -2, -9, -10)%>%
+    filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  checkfunction1()
+
+
+K1BE1_T1 <- K1BE1%>%
+  inner_join(Einzelteil1, by= c("ID_T1" = "ID_T01"), suffix = c("_Component", "_Part"))%>%
+  select( -ID_T2, -ID_T3, -ID_T4)%>%
+  rename(ID_Part = ID_T1)
+
+
+K1BE1_T2 <- K1BE1%>%
+  inner_join(Einzelteil2, by= c("ID_T2" = "ID_T02"), suffix =c("_Component", "_Part"))%>%
+  select(-ID_T1, -ID_T3, -ID_T4)%>%
+  rename(ID_Part = ID_T2)
+
+K1BE1_T3 <- K1BE1%>%
+  inner_join(Einzelteil3, by= c("ID_T3" = "ID_T03"), suffix = c("_Component", "_Part"))%>%
+  select(-ID_T1, -ID_T2, -ID_T4)%>%
+  rename(ID_Part = ID_T3)
+
+
+K1BE1_T4<- K1BE1%>%
+  inner_join(Einzelteil4, by= c("ID_T4" = "ID_T04"), suffix =c("_Component", "_Part"))%>%
+  select(-ID_T1, -ID_T2, -ID_T3)%>%
+  rename(ID_Part = ID_T4)
+
+K1BE1_Parts <- K1BE1_T1 %>%
+  bind_rows(K1BE1_T2)%>%
+  bind_rows(K1BE1_T3)%>%
+  bind_rows(K1BE1_T4) 
+
+#delet unnecessarily Tibble
+rm(K1BE1_T1,K1BE1_T2,K1BE1_T3,K1BE1_T4,K1BE1,Einzelteil4,Einzelteil3)
+```
+
+#### K1BE2: Motor ComponentsPart 
+```{r message=FALSE, warning=FALSE}
+Delim <- reader::get.delim("Data/Komponente/Bestandteile_Komponente_K1BE2.csv")
+ComponentsPart_K1BE2 <- read_csv2("Data/Komponente/Bestandteile_Komponente_K1BE2.csv") %>% 
+select(6,2:5) 
+
+Delim <- reader::get.delim("Data/Komponente/Komponente_K1BE2.csv")
+Faulty_K1BE2<- read_csv2("Data/Komponente/Komponente_K1BE2.csv")%>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")))%>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  select(-X1,-X1_1,-Produktionsdatum_Origin_01011970,-origin)
+
+
+K1BE2 <- Faulty_K1BE2%>%
+  inner_join(Component_Vehicles, c("ID_Motor"="ID_Motor"))%>%
+  select(-ID_Karosserie, -ID_Schaltung, -ID_Sitze)%>%
+  inner_join(ComponentsPart_K1BE2,c("ID_Motor"="ID_K1BE2"))%>%
+  select(ID_Fahrzeug,ID_Motor, Fehlerhaft, ID_T1, ID_T2, ID_T7, ID_T8)%>%
+  rename(ID_Component = ID_Motor)
+
+#delete unnecessary data
+rm(Faulty_K1BE2,ComponentsPart_K1BE2)
+
+K1BE2_T1 <- K1BE2%>%
+  inner_join(Einzelteil1, by= c("ID_T1" = "ID_T01"), suffix =c("_Component", "_Part"))%>%
+  select(-ID_T2, -ID_T7, -ID_T8)%>%
+  rename(ID_Part = ID_T1)
+
+K1BE2_T2 <- K1BE2%>%
+  inner_join(Einzelteil2, by= c("ID_T2" = "ID_T02"), suffix = c("_Component", "_Part"))%>%
+  select( -ID_T1, -ID_T7, -ID_T8)%>%
+  rename(ID_Part = ID_T2)
+
+#Einzelteil7
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T07.txt")
+Einzelteil7 <- read_file("Data/Einzelteil/Einzelteil_T07.txt")%>%
+  str_replace_all(., "\t", ";")%>%
+  str_replace_all(., "\"\"" ,"\n")%>%
+  str_remove_all(., "\"")%>%
+  fread(text= .)%>%
+  as_tibble()%>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+         Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+    select(-1, -2, -9, -10)
+
+################Correcestion the data################
+Einzelteil7 <- read_file("Data/Einzelteil/Einzelteil_T07.txt")%>%
+  str_replace_all(., "\t", ";")%>%
+  str_replace_all(., "\"\"" ,"\n")%>%
+  str_remove_all(., "\"")%>%
+  fread(text= .)%>%
+  as_tibble()%>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+         Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  select(-1, -2, -9, -10)%>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) 
+
+
+K1BE2_T7<- K1BE2%>%
+  inner_join(Einzelteil7, by= c("ID_T7" = "ID_T07"), suffix = c("_Component", "_Part"))%>%
+  select( -ID_T1, -ID_T2, -ID_T8)%>%
+  rename(ID_Part = ID_T7)
+
+# Einzelteil8
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T08.csv")
+Einzelteil8<- read_csv("Data/Einzelteil/Einzelteil_T08.csv")%>%
+  #mutate(ID_T08 = mapply(ID_T08, FUN =correctionFunction))%>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+         Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  select(-1, -2, -9, -10)%>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) 
+
+
+K1BE2_T8<- K1BE2%>%
+  inner_join(Einzelteil8, by= c("ID_T8" = "ID_T08"), suffix = c("_Component", "_Part"))%>%
+  select( -ID_T1, -ID_T2, -ID_T7)%>%
+  rename(ID_Part = ID_T8)
+
+K1BE2_Parts <- K1BE2_T1 %>%
+  bind_rows(K1BE2_T2)%>%
+  bind_rows(K1BE2_T7)%>%
+  bind_rows(K1BE2_T8)
+
+# delete unnecessarily Tibble
+rm(K1BE2_T1,K1BE2_T2,K1BE2_T7,K1BE2_T8,K1BE2)
+```
+
+#### K1DI1: DieselMotor ComponentsPart in OEM1
+```{r message=FALSE, warning=FALSE}
+Delim <- reader::get.delim("Data/Komponente/Bestandteile_Komponente_K1DI1.csv")
+ComponentsPart_K1DI1 <- read_csv2("Data/Komponente/Bestandteile_Komponente_K1DI1.csv") %>% 
+  select(6,2:5) 
+
+Delim <- reader::get.delim("Data/Komponente/Komponente_K1DI1.csv")
+Faulty_K1DI1 <- read_csv("Data/Komponente/Komponente_K1DI1.csv")%>%
+  mutate(ID_Motor = coalesce(ID_Motor.x, ID_Motor.y),
+         Herstellernummer=coalesce( Herstellernummer.x, Herstellernummer.y),
+         Werksnummer=coalesce( Werksnummer.x, Werksnummer.y),
+         Fehlerhaft=coalesce(Fehlerhaft.x, Fehlerhaft.y),
+         Fehlerhaft_Datum=coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+         Fehlerhaft_Fahrleistung=coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y),
+         Production_Date = coalesce( Produktionsdatum.x, Produktionsdatum.y))%>%
+  filter(Fehlerhaft == 1,Production_Date >= as.Date("2014-01-01"),Production_Date <=as.Date("2016-12-31")) %>% 
+  select(ID_Motor,Herstellernummer,Werksnummer,Fehlerhaft,Fehlerhaft_Datum,Fehlerhaft_Fahrleistung,Production_Date)
+
+K1DI1 <- Faulty_K1DI1%>%
+  inner_join(Component_Vehicles, c("ID_Motor"="ID_Motor"))%>%
+  select(-ID_Karosserie, -ID_Schaltung, -ID_Sitze)%>%
+  inner_join(ComponentsPart_K1DI1,c("ID_Motor"="ID_K1DI1"))%>%
+  select(ID_Fahrzeug,ID_Motor, Fehlerhaft, ID_T1, ID_T2, ID_T5, ID_T6)%>%
+  rename(ID_Component = ID_Motor)
+
+#delete unnecessary data
+rm(Faulty_K1BE2,ComponentsPart_K1BE2)
+
+K1DI1_T1 <- K1DI1%>%
+  inner_join(Einzelteil1, by= c("ID_T1" = "ID_T01"), suffix = c("_Component", "_Part"))%>%
+  select(-ID_T2, -ID_T5, -ID_T6)%>%
+  rename(ID_Part = ID_T1)
+
+K1DI1_T2 <- K1DI1%>%
+  inner_join(Einzelteil2, by= c("ID_T2" = "ID_T02"), suffix = c("_Component", "_Part"))%>%
+  select( -ID_T1, -ID_T5, -ID_T6)%>%
+  rename(ID_Part = ID_T2)
+
+# import Einzelteil5
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T05.csv")
+Einzelteil5 <- read_csv("Data/Einzelteil/Einzelteil_T05.csv")%>%
+  mutate(ID_T05 = coalesce(ID_T05.x, ID_T05.y),
+         Produktionsdatum = coalesce(Produktionsdatum.x, Produktionsdatum.y),
+         Produktionsdatum = as.Date(as.POSIXct(Produktionsdatum, "%Y-%m-%d")),
+         Herstellernummer = coalesce(Herstellernummer.x, Herstellernummer.y),
+         Werksnummer = coalesce(Werksnummer.x, Werksnummer.y),
+         Fehlerhaft = coalesce(Fehlerhaft.x, Fehlerhaft.y),
+         Fehlerhaft_Datum = coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+         Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d")),
+         Fehlerhaft_Fahrleistung = coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y)) %>%
+    select(17:23)%>%
+    filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31"))
+  
+  #mutate(ID_T05 = mapply(ID_T05, FUN = correctionFunction))%>%
+  
+
+K1DI1_T5<- K1DI1%>%
+  inner_join(Einzelteil5, by= c("ID_T5" = "ID_T05"), suffix = c("_Component", "_Part"))%>%
+  select( -ID_T1, -ID_T2, -ID_T6)%>%
+  rename(ID_Part = ID_T5)
+
+#Einzelteil6 importing
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T06.csv")
+Einzelteil6 <- read_csv("Data/Einzelteil/Einzelteil_T06.csv")%>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+         Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  select(-Produktionsdatum_Origin_01011970,-origin, -X1, -X1_1)
+  #mutate(ID_T06 = mapply(ID_T06, FUN = correctionFunction))%>%
+
+
+K1DI1_T6<- K1DI1%>%
+  inner_join(Einzelteil6, by= c("ID_T6" = "ID_T06"), suffix = c("_Component", "_Part"))%>%
+  select( -ID_T1, -ID_T2, -ID_T5)%>%
+  rename(ID_Part = ID_T6)
+
+K1DI1_Parts <- K1DI1_T1 %>%
+  bind_rows(K1DI1_T2)%>%
+  bind_rows(K1DI1_T5)%>%
+  bind_rows(K1DI1_T6)
+
+#delete
+rm(K1DI1_T1,K1DI1_T2,K1DI1_T5,K1DI1_T6,K1DI1,Einzelteil5)
+```
+
+### K1DI2: DieselMotor ComponentsPart in OEM2
+```{r message=FALSE, warning=FALSE}
+Delim <- reader::get.delim("Data/Komponente/Bestandteile_Komponente_K1DI2.csv")
+ComponentsPart_K1DI2 <- read_csv2("Data/Komponente/Bestandteile_Komponente_K1DI2.csv") %>% 
+  select(6,2:5) 
+
+Faulty_K1DI2<- read_file("Data/Komponente/Komponente_K1DI2.txt")%>%
+  str_replace_all(., "\\\\", ";")%>%
+  str_replace_all(., "\t" ,"\n")%>%
+  fread(text= .)%>%
+  as_tibble()%>%
+  mutate(Production_Date = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")))%>%
+  filter(Fehlerhaft == 1,Production_Date >= as.Date("2014-01-01"),Production_Date <=as.Date("2016-12-31")) %>% 
+  select(-X1,-V1,-Produktionsdatum_Origin_01011970,-origin)
+
+
+K1DI2 <- Faulty_K1DI2%>%
+  inner_join(Component_Vehicles, c("ID_Motor"="ID_Motor"))%>%
+  select(-ID_Karosserie, -ID_Schaltung, -ID_Sitze)%>%
+  inner_join(ComponentsPart_K1DI2,c("ID_Motor"="ID_K1DI2"))%>%
+  rename(ID_Component = ID_Motor) %>% 
+  select(ID_Fahrzeug,ID_Component, Fehlerhaft, ID_T1, ID_T2, ID_T9, ID_T10)
+
+#delete unnecessary data
+rm(Faulty_K1DI2,ComponentsPart_K1DI2)
+
+K1DI2_T1 <- K1DI2%>%
+  inner_join(Einzelteil1, by= c("ID_T1" = "ID_T01"), suffix = c("_Component", "_Part"))%>%
+  select(-ID_T2, -ID_T9, -ID_T10)%>%
+  rename(ID_Part = ID_T1)
+
+K1DI2_T2 <- K1DI2%>%
+  inner_join(Einzelteil2, by= c("ID_T2" = "ID_T02"), suffix = c("_Component", "_Part"))%>%
+  select(-ID_T1, -ID_T9, -ID_T10)%>%
+  rename(ID_Part = ID_T2)
+
+#Einzelteil 9
+Einzelteil9 <- read_file("Data/Einzelteil/Einzelteil_T09.txt")%>%
+  str_replace_all(., "\\\\", ";")%>%
+  str_replace_all(., "\v" ,"\n")%>%
+  fread(text= .)%>%
+  as_tibble()%>%
+  mutate(ID_T09 = coalesce( ID_T09.x, ID_T09.y),
+         Produktionsdatum = coalesce(Produktionsdatum.x, Produktionsdatum.y),
+         Produktionsdatum = as.Date(as.POSIXct(Produktionsdatum, "%Y-%m-%d")),
+         Herstellernummer = coalesce(Herstellernummer.x, Herstellernummer.y),
+         Werksnummer = coalesce(Werksnummer.x, Werksnummer.y),
+         Fehlerhaft = coalesce(Fehlerhaft.x, Fehlerhaft.y),
+         Fehlerhaft_Datum = coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+         Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d")),
+         Fehlerhaft_Fahrleistung = coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y)) %>%
+    select(17:23)%>%
+    filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31"))
+
+
+K1DI2_T9<- K1DI2%>%
+  inner_join(Einzelteil9, by= c("ID_T9" = "ID_T09"), suffix = c("_Component", "_Part"))%>%
+  select( -ID_T1, -ID_T2, -ID_T10)%>%
+  rename(ID_Part = ID_T9)
+
+#Einzelteil 10
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T10.csv")
+Einzeteil10 <- read_csv2("Data/Einzelteil/Einzelteil_T10.csv")%>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+         Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  select(-Produktionsdatum_Origin_01011970,-origin, -X1, -X1_1)
+  #mutate(ID_T10 = mapply(ID_T10, FUN = correctionFunction))%>%
+
+
+K1DI2_T10<- K1DI2%>%
+  inner_join(Einzeteil10, by= c("ID_T10" = "ID_T10"), suffix = c("_Component", "_Part"))%>%
+  select( -ID_T1, -ID_T2, -ID_T9)%>%
+  rename(ID_Part = ID_T10)
+
+K1DI2_Parts <- K1DI2_T1 %>%
+  bind_rows(K1DI2_T2)%>%
+  bind_rows(K1DI2_T9)%>%
+  bind_rows(K1DI2_T10)
+
+#delete
+rm(K1DI2_T1,K1DI2_T2,K1DI2_T9,K1DI2_T10,K1DI2)
+```
+
+++++++++++
+#### K2LE1: Seats ComponentsPart
+```{r message=FALSE, warning=FALSE}
+Delim <- reader::get.delim("Data/Komponente/Bestandteile_Komponente_K2LE1.csv")
+Componentspart_K2LE1<-read_csv2("Data/Komponente/Bestandteile_Komponente_K2LE1.csv") %>%
+  select(5,2:4) 
+
+Faulty_K2LE1 <- read_file("Data/Komponente/Komponente_K2LE1.txt")%>%
+  str_replace_all(.,"II", ";")%>%
+  str_replace_all(.,"\v","\n")%>%
+  fread(text= .)%>%
+  as_tibble()%>%
+  mutate(ID_Sitze = coalesce( ID_Sitze.x, ID_Sitze.y),
+         Herstellernummer=coalesce( Herstellernummer.x, Herstellernummer.y),
+         Werksnummer=coalesce( Werksnummer.x, Werksnummer.y),
+         Fehlerhaft=coalesce(Fehlerhaft.x, Fehlerhaft.y),
+         Fehlerhaft_Datum=coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+         Fehlerhaft_Fahrleistung=coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y),
+         Production_Date = coalesce( Produktionsdatum.x, Produktionsdatum.y))%>%
+  filter(Fehlerhaft == 1,Production_Date >= as.Date("2014-01-01"),Production_Date <=as.Date("2016-12-31")) %>% 
+  select(ID_Sitze,Herstellernummer,Werksnummer,Fehlerhaft,Fehlerhaft_Datum,Fehlerhaft_Fahrleistung,Production_Date)
+
+
+K2LE1 <- Faulty_K2LE1%>%
+  inner_join(Component_Vehicles, c("ID_Sitze"="ID_Sitze"))%>%
+  select(-ID_Karosserie, -ID_Schaltung, -ID_Motor)%>%
+  inner_join(Componentspart_K2LE1,c("ID_Sitze"="ID_K2LE1"))%>%
+  select(ID_Fahrzeug,ID_Sitze, Fehlerhaft, ID_T11, ID_T14, ID_T15)
+
+#delete unnecessary data
+rm(Faulty_K2LE1,Componentspart_K2LE1)
+
+
+########Einzelteil11########
+Einzelteil11 <- read_file("Data/Einzelteil/Einzelteil_T11.txt")%>%
+  str_replace_all(., "\t", ";")%>%
+  str_replace_all(., "\f" ,"\n")%>%
+  fread(text= .)%>%
+  as_tibble()%>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  select(-Produktionsdatum_Origin_01011970,-origin, -X1, -V1)
+  #mutate(ID_T11= mapply(ID_T11, FUN=correctionFunction))%>%
+
+
+K2LE1_T11 <- K2LE1%>%
+  inner_join(Einzelteil11, by= c("ID_T11" = "ID_T11"), suffix = c("_Sitze", "_T11"))%>%
+  select(-ID_T14, -ID_T15)
+
+#######Einzelteil14#########
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T14.csv")
+Einzelteil14 <- read_csv2("Data/Einzelteil/Einzelteil_T14.csv")%>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  select(-Produktionsdatum_Origin_01011970,-origin, -X1, -X1_1)
+  #mutate(ID_T14 = mapply(ID_T14, FUN =correctionFunction))%>%
+
+
+K2LE1_T14 <- K2LE1%>%
+  inner_join(Einzelteil14, by= c("ID_T14" = "ID_T14"), suffix = c("_Sitze", "_T14"))%>%
+  select(-ID_T11, -ID_T15)
+
+#######Einzelteil15#####
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T15.csv")
+Einzelteil15 <- read_csv2("Data/Einzelteil/Einzelteil_T15.csv")%>%
+  mutate(ID_T15 = coalesce( ID_T15.x, ID_T15.y),
+         Produktionsdatum = coalesce(Produktionsdatum.x, Produktionsdatum.y),
+       Produktionsdatum = as.Date(as.POSIXct(Produktionsdatum, "%Y-%m-%d")),
+       Herstellernummer = coalesce(Herstellernummer.x, Herstellernummer.y),
+       Werksnummer = coalesce(Werksnummer.x, Werksnummer.y),
+       Fehlerhaft = coalesce(Fehlerhaft.x, Fehlerhaft.y),
+       Fehlerhaft_Datum = coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d")),
+       Fehlerhaft_Fahrleistung = coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y)) %>%
+  select(17:23)%>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31"))
+
+  #mutate(ID_T15 = mapply(ID_T15, FUN =correctionFunction))%>%
+
+
+K2LE1_T15 <- K2LE1%>%
+  inner_join(Einzelteil15, by= c("ID_T15" = "ID_T15"), suffix = c("_Sitze", "_T15"))%>%
+  select(-ID_T11, -ID_T14)
+
+K2LE1_Parts <- K2LE1_T11 %>%
+  inner_join(K2LE1_T14)%>%
+  inner_join(K2LE1_T15) 
+
+#delete
+rm(K2LE1_T11,K2LE1_T14,K2LE1_T15,K2LE1)
+```
+
+#### K2LE2: Seats ComponentsPart
+```{r message=FALSE, warning=FALSE}
+Delim <- reader::get.delim("Data/Komponente/Bestandteile_Komponente_K2LE2.csv")
+Componentspart_K2LE2<-read_csv2("Data/Komponente/Bestandteile_Komponente_K2LE2.csv") %>%
+  select(5,2:4) 
+
+Faulty_K2LE2 <- read_file("Data/Komponente/Komponente_K2LE2.txt")%>%
+  str_replace_all(.,"\\\\", ";")%>%
+  str_replace_all(.,"\r","\n")%>%
+  fread(text= .)%>%
+  as_tibble()%>%
+  mutate(Production_Date = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")))%>%
+  filter(Fehlerhaft == 1,Production_Date >= as.Date("2014-01-01"),Production_Date <=as.Date("2016-12-31")) %>% 
+  select(-X1,-V1,-Produktionsdatum_Origin_01011970,-origin)
+
+
+K2LE2 <- Faulty_K2LE2%>%
+  inner_join(Component_Vehicles, c("ID_Sitze"="ID_Sitze"))%>%
+  select(-ID_Karosserie, -ID_Schaltung, -ID_Motor)%>%
+  inner_join(Componentspart_K2LE2,c("ID_Sitze"="ID_K2LE2"))%>% 
+  select(ID_Fahrzeug,ID_Sitze, Fehlerhaft, ID_T16, ID_T19, ID_T20)
+
+#delete unnecessary data
+rm(Faulty_K2LE2,ComponentsPart_K2LE2)
+
+
+#########Einzelteil16#####
+Einzelteil16 <- read_file("Data/Einzelteil/Einzelteil_T16.txt")%>%
+  str_replace_all(.," \\| \\| ", ";")%>%
+  str_replace_all(., "\t" ,"\n")%>%
+  fread(text= .)%>%
+  as_tibble()%>%
+  mutate(ID_T16 = coalesce( ID_T16.x, ID_T16.y),
+         Produktionsdatum = coalesce(Produktionsdatum.x, Produktionsdatum.y),
+       Produktionsdatum = as.Date(as.POSIXct(Produktionsdatum, "%Y-%m-%d")),
+       Herstellernummer = coalesce(Herstellernummer.x, Herstellernummer.y),
+       Werksnummer = coalesce(Werksnummer.x, Werksnummer.y),
+       Fehlerhaft = coalesce(Fehlerhaft.x, Fehlerhaft.y),
+       Fehlerhaft_Datum = coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d")),
+       Fehlerhaft_Fahrleistung = coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y)) %>%
+  select(17:23)%>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31"))
+
+  #mutate(ID_T16= mapply(ID_T16, FUN=correctionFunction))%>% 
+  
+
+K2LE2_T16 <- K2LE2%>%
+  inner_join(Einzelteil16, by= c("ID_T16" = "ID_T16"), suffix = c("_Sitze", "_T16"))%>%
+  select(-ID_T19, -ID_T20)
+
+##########Einzelteil19##########
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T19.csv")
+Einzelteil19 <- read_csv("Data/Einzelteil/Einzelteil_T19.csv") %>% 
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  select(-Produktionsdatum_Origin_01011970,-origin, -X1, -X1_1)
+  #mutate(ID_T19 = mapply(ID_T19, FUN =correctionFunction))%>%
+
+
+K2LE2_T19 <- K2LE2%>%
+  inner_join(Einzelteil19, by= c("ID_T19" = "ID_T19"), suffix = c("_Sitze", "_T19"))%>%
+  select(-ID_T16, -ID_T20)
+
+#######Einzelteil20######
+Einzelteil20 <- read_file("Data/Einzelteil/Einzelteil_T20.txt")%>%
+  str_replace_all(.," \\| \\| ", ";")%>%
+  str_replace_all(., " " ,"\n")%>%
+  fread(text= .)%>%
+  as_tibble()%>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  select(-Produktionsdatum_Origin_01011970,-origin, -X1, -V1)
+  #mutate(ID_T20 = mapply(ID_T20, FUN =correctionFunction))%>%
+
+
+K2LE2_T20 <- K2LE2%>%
+  inner_join(Einzelteil20, by= c("ID_T20" = "ID_T20"), suffix = c("_Sitze", "_T20"))%>%
+  select(-ID_T16, -ID_T19)
+
+K2LE2_Parts <- K2LE2_T16 %>%
+  inner_join(K2LE2_T19)%>%
+  inner_join(K2LE2_T20)
+
+#delete
+rm(K2LE2_T16,K2LE2_T19,K2LE2_T20,K2LE2)
+```
+
+#### K2ST1: Seats ComponentsPart
+```{r message=FALSE, warning=FALSE}
+Delim <- reader::get.delim("Data/Komponente/Bestandteile_Komponente_K2ST1.csv")
+Componentspart_K2ST1<-read_csv2("Data/Komponente/Bestandteile_Komponente_K2ST1.csv") %>%
+  select(6,3:5)
+
+Faulty_K2ST1 <- read_file("Data/Komponente/Komponente_K2ST1.txt")%>%
+  str_replace_all(.,"\\\\", ";")%>%
+  str_replace_all(.,"\r","\n")%>%
+  fread(text= .)%>%
+  as_tibble()%>%
+  rename(Production_Date=Produktionsdatum) %>% 
+  select(-1,-2) %>% 
+  filter(Fehlerhaft == 1,Production_Date >= as.Date("2014-01-01"),Production_Date <=as.Date("2016-12-31"))
+
+K2ST1 <- Faulty_K2ST1%>%
+  inner_join(Component_Vehicles, c("ID_Sitze"="ID_Sitze"))%>%
+  select(-ID_Karosserie, -ID_Schaltung, -ID_Motor)%>%
+  inner_join(Componentspart_K2ST1,c("ID_Sitze"="ID_K2ST1"))%>%
+  select(ID_Fahrzeug,ID_Sitze, Fehlerhaft, ID_T11, ID_T12, ID_T13)
+
+#delete unnecessary data
+rm(Faulty_K2ST1,Componentspart_K2ST1)
+
+
+K2ST1_T11 <- K2ST1%>%
+  inner_join(Einzelteil11, by= c("ID_T11" = "ID_T11"), suffix = c("_Sitze", "_T11"))%>%
+  select(-ID_T12, -ID_T13)
+
+##########Einzelteil12##########
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T12.csv")
+Einzelteil12 <- read_csv2("Data/Einzelteil/Einzelteil_T12.csv")%>%
+  mutate(ID_T12 = coalesce( ID_T12.x, ID_T12.y),
+         Produktionsdatum = coalesce(Produktionsdatum.x, Produktionsdatum.y),
+       Produktionsdatum = as.Date(as.POSIXct(Produktionsdatum, "%Y-%m-%d")),
+       Herstellernummer = coalesce(Herstellernummer.x, Herstellernummer.y),
+       Werksnummer = coalesce(Werksnummer.x, Werksnummer.y),
+       Fehlerhaft = coalesce(Fehlerhaft.x, Fehlerhaft.y),
+       Fehlerhaft_Datum = coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d")),
+       Fehlerhaft_Fahrleistung = coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y)) %>%
+  select(17:23)%>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31"))
+
+#mutate(ID_T12 = mapply(ID_T12, FUN =correctionFunction))%>%
+
+
+K2ST1_T12 <- K2ST1%>%
+  inner_join(Einzelteil12, by= c("ID_T12" = "ID_T12"), suffix = c("_Sitze", "_T12"))%>%
+  select(-ID_T11, -ID_T13)
+
+#########Einzelteil13#########
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T13.csv")
+Einzelteil13 <- read_csv2("Data/Einzelteil/Einzelteil_T13.csv") %>% 
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  select(-Produktionsdatum_Origin_01011970,-origin, -X1, -X1_1)
+  #mutate(ID_T13 = mapply(ID_T13, FUN =correctionFunction))%>%
+  
+
+K2ST1_T13 <- K2ST1%>%
+  inner_join(Einzelteil13, by= c("ID_T13" = "ID_T13"), suffix = c("_Sitze", "_T13"))%>%
+  select(-ID_T11, -ID_T12)
+
+K2ST1_Parts <- K2ST1_T11 %>%
+  inner_join(K2ST1_T12)%>%
+  inner_join(K2ST1_T13)
+
+#delete
+rm(K2ST1_T11,K2ST1_T12,K2ST1_T13,K2ST1)
+```
+
+#### K2ST2: Seats ComponentsPart
+```{r message=FALSE, warning=FALSE}
+Delim <- reader::get.delim("Data/Komponente/Bestandteile_Komponente_K2ST2.csv")
+Componentspart_K2ST2<-read_csv2("Data/Komponente/Bestandteile_Komponente_K2ST2.csv") %>%
+  select(5,2:4)
+
+Delim <- reader::get.delim("Data/Komponente/Komponente_K2ST2.csv")
+Faulty_K2ST2 <- read_csv2("Data/Komponente/Komponente_K2ST2.csv")%>%
+  mutate(Production_Date = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")))%>%
+  filter(Fehlerhaft == 1,Production_Date >= as.Date("2014-01-01"),Production_Date <=as.Date("2016-12-31")) %>% 
+  select(-X1,-X1_1,-Produktionsdatum_Origin_01011970,-origin)
+
+K2ST2 <- Faulty_K2ST2%>%
+  inner_join(Component_Vehicles, c("ID_Sitze"="ID_Sitze"))%>%
+  select(-ID_Karosserie, -ID_Schaltung, -ID_Motor)%>%
+  inner_join(Componentspart_K2ST2,c("ID_Sitze"="ID_K2ST2"))%>%
+  select(ID_Fahrzeug,ID_Sitze, Fehlerhaft, ID_T16, ID_T17, ID_T18)%>%
+  rename(ID_Component = ID_Sitze)
+
+#delete unnecessary data
+rm(Faulty_K2ST2,Componentspart_K2ST2)
+
+K2ST2_T16 <- inner_join(K2ST2, Einzelteil16, by= c("ID_T16" = "ID_T16"),  suffix = c("_Component", "_Part"))%>%
+  select( -ID_T17, -ID_T18)%>%
+  rename(ID_Part = ID_T16)
+
+#######Einzelteil17######
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T17.csv")
+Einzelteil17 <- read_csv2("Data/Einzelteil/Einzelteil_T17.csv")%>%
+  mutate(ID_T17 = coalesce( ID_T17.x, ID_T17.y),
+         Produktionsdatum = coalesce(Produktionsdatum.x, Produktionsdatum.y),
+       Produktionsdatum = as.Date(as.POSIXct(Produktionsdatum, "%Y-%m-%d")),
+       Herstellernummer = coalesce(Herstellernummer.x, Herstellernummer.y),
+       Werksnummer = coalesce(Werksnummer.x, Werksnummer.y),
+       Fehlerhaft = coalesce(Fehlerhaft.x, Fehlerhaft.y),
+       Fehlerhaft_Datum = coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d")),
+       Fehlerhaft_Fahrleistung = coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y)) %>%
+  select(17:23)%>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31"))
+
+  #mutate(ID_T17 = mapply( ID_T17, FUN = correctionFunction))%>%
+
+
+K2ST2_T17 <- inner_join(K2ST2, Einzelteil17, by= c("ID_T17" = "ID_T17"),  suffix = c("_Component", "_Part"))%>%
+  select( -ID_T16, -ID_T18)%>%
+  rename(ID_Part = ID_T17)
+
+##########Einzelteil18##########
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T18.csv")
+Einzelteil18 <- read_csv2("Data/Einzelteil/Einzelteil_T18.csv")%>%
+ mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  select(-Produktionsdatum_Origin_01011970,-origin, -X1, -X1_1)
+  #mutate(ID_T18 = mapply( ID_T18, FUN = correctionFunction))%>%
+
+
+K2ST2_T18 <- inner_join(K2ST2, Einzelteil18, by= c("ID_T18" = "ID_T18"),  suffix = c("_Component", "_Part"))%>%
+  select( -ID_T16, -ID_T17)%>%
+  rename(ID_Part = ID_T18)
+
+K2ST2_Parts <- bind_rows(K2ST2_T16, K2ST2_T17)%>%
+  bind_rows(K2ST2_T18)
+
+#delete
+rm(K2ST2_T16,K2ST2_T17,K2ST2_T18,K2ST2)
+```
+
+#### K3AG1: Gears ComponentsPart
+```{r message=FALSE, warning=FALSE}
+Delim <- reader::get.delim("Data/Komponente/Bestandteile_Komponente_K3AG1.csv")
+Componentspart_K3AG1<-read_csv2("Data/Komponente/Bestandteile_Komponente_K3AG1.csv") %>%
+  select(5,2:4)
+
+Delim <- reader::get.delim("Data/Komponente/Komponente_K3AG1.csv")
+Faulty_K3AG1 <- read_csv("Data/Komponente/Komponente_K3AG1.csv")%>%
+  mutate(ID_Schaltung = coalesce( ID_Schaltung.x, ID_Schaltung.y),
+         Herstellernummer=coalesce( Herstellernummer.x, Herstellernummer.y),
+         Werksnummer=coalesce( Werksnummer.x, Werksnummer.y),
+         Fehlerhaft=coalesce(Fehlerhaft.x, Fehlerhaft.y),
+         Fehlerhaft_Datum=coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+         Fehlerhaft_Fahrleistung=coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y),
+         Production_Date = coalesce( Produktionsdatum.x, Produktionsdatum.y))%>%
+  filter(Fehlerhaft == 1,Production_Date >= as.Date("2014-01-01"),Production_Date <=as.Date("2016-12-31")) %>% 
+  select(ID_Schaltung,Herstellernummer,Werksnummer,Fehlerhaft,Fehlerhaft_Datum,Fehlerhaft_Fahrleistung,Production_Date)
+
+K3AG1 <- Faulty_K3AG1%>%
+  inner_join(Component_Vehicles, c("ID_Schaltung"="ID_Schaltung"))%>%
+  select(-ID_Karosserie, -ID_Sitze, -ID_Motor)%>%
+  inner_join(Componentspart_K3AG1,c("ID_Schaltung"="ID_K3AG1"))%>%
+  select(ID_Fahrzeug,ID_Schaltung, Fehlerhaft, ID_T21, ID_T24, ID_T25)%>%
+  rename(ID_Component = ID_Schaltung)
+
+#delete unnecessary data
+rm(Faulty_K3AG1,Componentspart_K3AG1)
+
+#########Einzelteil21#######
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T21.csv")
+Einzelteil21 <- read_csv2("Data/Einzelteil/Einzelteil_T21.csv")%>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  select(-Produktionsdatum_Origin_01011970,-origin, -X1, -X1_1)
+        #mutate(ID_T21 = mapply(ID_T21, FUN =correctionFunction))%>%
+
+
+K3AG1_T21 <- inner_join(K3AG1, Einzelteil21, by= c("ID_T21" = "ID_T21"),  suffix = c("_Component", "_Part"))%>%
+  select( -ID_T24, -ID_T25)%>%
+  rename(ID_Part = ID_T21)
+
+#############Einzelteil24######
+Einzelteil24<- read_file("Data/Einzelteil/Einzelteil_T24.txt")%>%
+  str_replace_all(.,"\t", ";")%>%
+  str_replace_all(., "\f" ,"\n")%>%
+  fread(text= .)%>%
+  as_tibble()%>%
+  mutate(ID_T24 = coalesce( ID_T24.x, ID_T24.y),
+         Produktionsdatum = coalesce(Produktionsdatum.x, Produktionsdatum.y),
+       Produktionsdatum = as.Date(as.POSIXct(Produktionsdatum, "%Y-%m-%d")),
+       Herstellernummer = coalesce(Herstellernummer.x, Herstellernummer.y),
+       Werksnummer = coalesce(Werksnummer.x, Werksnummer.y),
+       Fehlerhaft = coalesce(Fehlerhaft.x, Fehlerhaft.y),
+       Fehlerhaft_Datum = coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d")),
+       Fehlerhaft_Fahrleistung = coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y)) %>%
+  select(17:23)%>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31"))
+
+  #mutate(ID_T24 = mapply( ID_T24, FUN = correctionFunction))%>%
+
+
+K3AG1_T24 <- inner_join(K3AG1, Einzelteil24, by= c("ID_T24" = "ID_T24"),  suffix = c("_Component", "_Part"))%>%
+  select( -ID_T21, -ID_T25)%>%
+  rename(ID_Part = ID_T24)
+
+##########Einzelteil25#######
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T25.csv")
+Einzelteil25 <- read_csv("Data/Einzelteil/Einzelteil_T25.csv")%>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  select(-Produktionsdatum_Origin_01011970,-origin, -X1, -X1_1)
+  #mutate(ID_T25 = mapply( ID_T25, FUN = correctionFunction))%>%
+  
+
+
+K3AG1_T25 <- inner_join(K3AG1, Einzelteil25, by= c("ID_T25" = "ID_T25"),  suffix = c("_Component", "_Part"))%>%
+  select( -ID_T21, -ID_T24)%>%
+  rename(ID_Part = ID_T25)
+
+
+K3AG1_Parts <- bind_rows(K3AG1_T21, K3AG1_T24)%>%
+  bind_rows(K3AG1_T25)
+
+#delete
+rm(K3AG1_T21,K3AG1_T24,K3AG1_T25,K3AG1)
+```
+
+#### K3AG2: Gears ComponentsPart
+```{r message=FALSE, warning=FALSE}
+Delim <- reader::get.delim("Data/Komponente/Bestandteile_Komponente_K3AG2.csv")
+Componentspart_K3AG2<-read_csv2("Data/Komponente/Bestandteile_Komponente_K3AG2.csv") %>%
+  select(5,2:4)
+
+Faulty_K3AG2 <- read_file("Data/Komponente/Komponente_K3AG2.txt")%>%
+  str_replace_all(.,"\\\\", ";")%>%
+  str_replace_all(., "\r" ,"\n")%>%
+  fread(text= .)%>%
+  as_tibble()%>%
+  mutate(Production_Date = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")))%>%
+  filter(Fehlerhaft == 1,Production_Date >= as.Date("2014-01-01"),Production_Date <=as.Date("2016-12-31")) %>% 
+  select(-X1,-V1,-Produktionsdatum_Origin_01011970,-origin)
+
+K3AG2 <- Faulty_K3AG2%>%
+  inner_join(Component_Vehicles, c("ID_Schaltung"="ID_Schaltung"))%>%
+  select(-ID_Karosserie, -ID_Sitze, -ID_Motor)%>%
+  inner_join(Componentspart_K3AG2,c("ID_Schaltung"="ID_K3AG2"))%>%
+  select(ID_Fahrzeug,ID_Schaltung, Fehlerhaft, ID_T21, ID_T24, ID_T27)%>%
+  rename(ID_Component = ID_Schaltung)
+
+#delete unnecessary data
+rm(Faulty_K3AG2,Componentspart_K3AG2)
+
+
+K3AG2_T21 <- inner_join(K3AG2, Einzelteil21, by= c("ID_T21" = "ID_T21"),   suffix = c("_Component", "_Part"))%>%
+  select( -ID_T24, -ID_T27)%>%
+  rename(ID_Part = ID_T21)
+
+K3AG2_T24 <- inner_join(K3AG2, Einzelteil24, by= c("ID_T24" = "ID_T24"),  suffix = c("_Component", "_Part"))%>%
+  select( -ID_T21, -ID_T27)%>%
+  rename(ID_Part = ID_T24)
+
+#########Einzelteil27#######
+Einzelteil27<- read_file("Data/Einzelteil/Einzelteil_T27.txt")%>%
+  str_replace_all(.," \\| \\| ", ";")%>%
+  str_replace_all(., "\a" ,"\n")%>%
+  fread(text= .)%>%
+  as_tibble()%>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  select(-Produktionsdatum_Origin_01011970,-origin, -X1, -V1)
+  #mutate(ID_T27 = mapply( ID_T27, FUN = correctionFunction))%>%
+  
+  
+
+K3AG2_T27 <- inner_join(K3AG2, Einzelteil27, by= c("ID_T27" = "ID_T27"),   suffix = c("_Component", "_Part"))%>%
+  select( -ID_T21, -ID_T24)%>%
+  rename(ID_Part = ID_T27)
+
+K3AG2_Parts <- bind_rows(K3AG2_T21, K3AG2_T24)%>%
+  bind_rows(K3AG2_T27)
+
+#delete
+rm(K3AG2_T21,K3AG2_T24,K3AG2_T27,K3AG2)
+```
+
+#### K3SG1: Gears ComponentsPart
+```{r message=FALSE, warning=FALSE}
+Delim <- reader::get.delim("Data/Komponente/Bestandteile_Komponente_K3SG1.csv")
+Componentspart_K3SG1<-read_csv2("Data/Komponente/Bestandteile_Komponente_K3SG1.csv") %>%
+  select(5,2:4)
+
+Delim <- reader::get.delim("Data/Komponente/Komponente_K3SG1.csv")
+Faulty_K3SG1 <- read_csv("Data/Komponente/Komponente_K3SG1.csv")%>%
+  mutate(ID_Schaltung = coalesce( ID_Schaltung.x, ID_Schaltung.y),
+         Herstellernummer=coalesce( Herstellernummer.x, Herstellernummer.y),
+         Werksnummer=coalesce( Werksnummer.x, Werksnummer.y),
+         Fehlerhaft=coalesce(Fehlerhaft.x, Fehlerhaft.y),
+         Fehlerhaft_Datum=coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+         Fehlerhaft_Fahrleistung=coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y),
+         Production_Date = coalesce( Produktionsdatum.x, Produktionsdatum.y))%>%
+  filter(Fehlerhaft == 1,Production_Date >= as.Date("2014-01-01"),Production_Date <=as.Date("2016-12-31")) %>% 
+  select(ID_Schaltung,Herstellernummer,Werksnummer,Fehlerhaft,Fehlerhaft_Datum,Fehlerhaft_Fahrleistung,Production_Date)
+
+K3SG1 <- Faulty_K3SG1%>%
+  inner_join(Component_Vehicles, c("ID_Schaltung"="ID_Schaltung"))%>%
+  select(-ID_Karosserie, -ID_Sitze, -ID_Motor)%>%
+  inner_join(Componentspart_K3SG1,c("ID_Schaltung"="ID_K3SG1"))%>%
+  select(ID_Fahrzeug,ID_Schaltung, Fehlerhaft, ID_T21, ID_T22, ID_T23)%>%
+  rename(ID_Component = ID_Schaltung)
+
+#delete unnecessary data
+rm(Faulty_K3SG1,Componentspart_K3SG1)
+
+
+K3SG1_T21 <- inner_join(K3SG1, Einzelteil21, by= c("ID_T21" = "ID_T21"),  suffix = c("_Component", "_Part"))%>%
+  select( -ID_T22, -ID_T23)%>%
+  rename(ID_Part = ID_T21)
+
+########Einzelteil22###########
+Einzelteil22 <- read_file("Data/Einzelteil/Einzelteil_T22.txt")%>%
+        str_replace_all(.,"\t", ";")%>%
+        str_replace_all(., "\"\"" ,"\n")%>%
+        str_replace_all(., "NA\"" ,"\n")%>%
+        str_remove_all(., "\"")%>%
+        fread(text= .)%>%
+        as_tibble()%>%
+        mutate(ID_T22 = coalesce( ID_T22.x, ID_T22.y),  
+               Produktionsdatum = coalesce(Produktionsdatum.x, Produktionsdatum.y),
+       Produktionsdatum = as.Date(as.POSIXct(Produktionsdatum, "%Y-%m-%d")),
+       Herstellernummer = coalesce(Herstellernummer.x, Herstellernummer.y),
+       Werksnummer = coalesce(Werksnummer.x, Werksnummer.y),
+       Fehlerhaft = coalesce(Fehlerhaft.x, Fehlerhaft.y),
+       Fehlerhaft_Datum = coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d")),
+       Fehlerhaft_Fahrleistung = coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y)) %>%
+  select(17:23)%>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31"))
+#mutate(ID_T22 = mapply( ID_T22, FUN = correctionFunction))%>%
+
+
+K3SG1_T22 <- inner_join(K3SG1, Einzelteil22, by= c("ID_T22" = "ID_T22"),  suffix = c("_Component", "_Part"))%>%
+  select( -ID_T21, -ID_T23)%>%
+  rename(ID_Part = ID_T22)
+
+#########Einzelteit23##########
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T23.csv")
+Einzelteil23 <- read_csv2("Data/Einzelteil/Einzelteil_T23.csv")%>%
+  mutate(ID_T23 = coalesce( ID_T23.x, ID_T23.y),
+         Produktionsdatum = coalesce(Produktionsdatum.x, Produktionsdatum.y),
+       Produktionsdatum = as.Date(as.POSIXct(Produktionsdatum, "%Y-%m-%d")),
+       Herstellernummer = coalesce(Herstellernummer.x, Herstellernummer.y),
+       Werksnummer = coalesce(Werksnummer.x, Werksnummer.y),
+       Fehlerhaft = coalesce(Fehlerhaft.x, Fehlerhaft.y),
+       Fehlerhaft_Datum = coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d")),
+       Fehlerhaft_Fahrleistung = coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y)) %>%
+  select(17:23)%>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31"))
+
+  #mutate(ID_T23 = mapply( ID_T23, FUN = correctionFunction))%>%
+
+K3SG1_T23 <- inner_join(K3SG1, Einzelteil23, by= c("ID_T23" = "ID_T23"),  suffix = c("_Component", "_Part"))%>%
+  select(-ID_T21, -ID_T22)%>%
+  rename(ID_Part = ID_T23)
+
+K3SG1_Parts <- bind_rows(K3SG1_T21, K3SG1_T22)%>%
+  bind_rows(K3SG1_T23)
+
+#delete
+rm(K3SG1_T21,K3SG1_T22,K3SG1_T23,K3SG1)
+```
+
+#### K3SG2: Gears ComponentsPart
+```{r message=FALSE, warning=FALSE}
+Delim <- reader::get.delim("Data/Komponente/Bestandteile_Komponente_K3SG2.csv")
+Componentspart_K3SG2<-read_csv2("Data/Komponente/Bestandteile_Komponente_K3SG2.csv") %>%
+  select(5,2:4)
+
+Delim <- reader::get.delim("Data/Komponente/Komponente_K3SG2.csv")
+Faulty_K3SG2 <- read_csv("Data/Komponente/Komponente_K3SG2.csv")%>%
+  mutate(Production_Date = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")))%>%
+  filter(Fehlerhaft == 1,Production_Date >= as.Date("2014-01-01"),Production_Date <=as.Date("2016-12-31")) %>% 
+  select(-X1,-X1_1,-Produktionsdatum_Origin_01011970,-origin)
+
+K3SG2 <- Faulty_K3SG2%>%
+  inner_join(Component_Vehicles, c("ID_Schaltung"="ID_Schaltung"))%>%
+  select(-ID_Karosserie, -ID_Motor, -ID_Sitze)%>%
+  inner_join(Componentspart_K3SG2,c("ID_Schaltung"="ID_K3SG2"))%>%
+  select(ID_Fahrzeug,ID_Schaltung, Fehlerhaft, ID_T21, ID_T22, ID_T26)%>%
+  rename(ID_Component = ID_Schaltung)
+
+#delete unnecessary data
+rm(Faulty_K3SG2,Componentspart_K3SG2)
+
+
+K3SG2_T21 <- K3SG2%>%
+  inner_join(Einzelteil21, by= c("ID_T21" = "ID_T21"), suffix = c("_Component", "_Part"))%>%
+  select(-ID_T22, -ID_T26)%>%
+  rename(ID_Part = ID_T21)
+
+#########Einzelteil22####
+Einzelteil22 <- read_file("Data/Einzelteil/Einzelteil_T22.txt")%>%
+        str_replace_all(.,"\t", ";")%>%
+        str_replace_all(., "\"\"" ,"\n")%>%
+        str_replace_all(., "NA\"" ,"\n")%>%
+        str_remove_all(., "\"")%>%
+        fread(text= .)%>%
+        as_tibble()%>%
+        mutate(ID_T22 = coalesce( ID_T22.x, ID_T22.y),  
+               Produktionsdatum = coalesce(Produktionsdatum.x, Produktionsdatum.y),
+       Produktionsdatum = as.Date(as.POSIXct(Produktionsdatum, "%Y-%m-%d")),
+       Herstellernummer = coalesce(Herstellernummer.x, Herstellernummer.y),
+       Werksnummer = coalesce(Werksnummer.x, Werksnummer.y),
+       Fehlerhaft = coalesce(Fehlerhaft.x, Fehlerhaft.y),
+       Fehlerhaft_Datum = coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d")),
+       Fehlerhaft_Fahrleistung = coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y)) %>%
+  select(17:23)%>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31"))
+          #mutate(ID_T22 = mapply( ID_T22, FUN = correctionFunction))%>%
+
+
+K3SG2_T22 <- K3SG2%>%
+  inner_join(Einzelteil22, by= c("ID_T22" = "ID_T22"), suffix = c("_Component", "_Part"))%>%
+  select( -ID_T21, -ID_T26)%>%
+  rename(ID_Part = ID_T22)
+
+#############Einzelteil26######
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T26.csv")
+Einzelteil26 <- read_csv2("Data/Einzelteil/Einzelteil_T26.csv")%>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  select(-Produktionsdatum_Origin_01011970,-origin, -X1, -X1_1)
+       # mutate(ID_T26 = mapply(ID_T26, FUN =correctionFunction))%>%
+
+
+K3SG2_T26 <- K3SG2%>%
+  inner_join(Einzelteil26, by= c("ID_T26" = "ID_T26"), suffix = c("_Component", "_Part"))%>%
+  select(-ID_T21, -ID_T22)%>%
+  rename(ID_Part = ID_T26)
+
+
+K3SG2_Parts <- K3SG2_T21 %>%
+  bind_rows(K3SG2_T22)%>%
+  bind_rows(K3SG2_T26)
+
+#delete
+rm(K3SG2_T21,K3SG2_T22,K3SG2_T26,K3SG2)
+
+```
+
+#### K4: VehiclesBody
+```{r message=FALSE, warning=FALSE}
+Delim <- reader::get.delim("Data/Komponente/Bestandteile_Komponente_K4.csv")
+Componentspart_K4<-read_csv2("Data/Komponente/Bestandteile_Komponente_K4.csv") %>% 
+  select(5,2:4)
+
+Delim <- reader::get.delim("Data/Komponente/Komponente_K4.csv")
+Faulty_K4 <- read_csv2("Data/Komponente/Komponente_K4.csv") %>%
+        mutate(ID_Karosserie = coalesce( ID_Karosserie.x, ID_Karosserie.y), 
+               Herstellernummer=coalesce( Herstellernummer.x, Herstellernummer.y),
+               Werksnummer=coalesce( Werksnummer.x, Werksnummer.y),
+               Fehlerhaft=coalesce(Fehlerhaft.x, Fehlerhaft.y),
+               Fehlerhaft_Datum=coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+               Fehlerhaft_Fahrleistung=coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y),
+               Production_Date = coalesce( Produktionsdatum.x, Produktionsdatum.y))%>%
+  filter(Fehlerhaft == 1,Production_Date >= as.Date("2014-01-01"),Production_Date <=as.Date("2016-12-31")) %>% 
+  select(ID_Karosserie,Herstellernummer,Werksnummer,Fehlerhaft,Fehlerhaft_Datum,Fehlerhaft_Fahrleistung,Production_Date)
+
+
+K4 <- Faulty_K4%>%
+        inner_join(Component_Vehicles, c("ID_Karosserie"="ID_Karosserie"))%>%
+        select(-ID_Schaltung, -ID_Motor, -ID_Sitze)%>%
+        inner_join(Componentspart_K4,c("ID_Karosserie"="ID_K4"))%>%
+        select(ID_Fahrzeug,ID_Karosserie, Fehlerhaft, ID_T30, ID_T31, ID_T32)%>%
+        rename(ID_Component = ID_Karosserie)
+
+#delete unnecessary data
+rm(Faulty_K4,Componentspart_K4)
+
+##########Einzelteil30########
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T30.csv")
+Einzelteil30<- read_csv("Data/Einzelteil/Einzelteil_T30.csv")%>%
+        mutate(ID_T30 = coalesce( ID_T30.x, ID_T30.y),  
+               Produktionsdatum = coalesce(Produktionsdatum.x, Produktionsdatum.y),
+       Produktionsdatum = as.Date(as.POSIXct(Produktionsdatum, "%Y-%m-%d")),
+       Herstellernummer = coalesce(Herstellernummer.x, Herstellernummer.y),
+       Werksnummer = coalesce(Werksnummer.x, Werksnummer.y),
+       Fehlerhaft = coalesce(Fehlerhaft.x, Fehlerhaft.y),
+       Fehlerhaft_Datum = coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d")),
+       Fehlerhaft_Fahrleistung = coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y)) %>%
+  select(17:23)%>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31"))
+    #mutate(ID_T30 = mapply(ID_T30, FUN =correctionFunction))%>%
+
+
+K4_T30 <- K4%>%
+        inner_join(Einzelteil30, by= c("ID_T30" = "ID_T30"), suffix = c("_Component", "_Part"))%>%
+        select(-ID_T31, -ID_T32)%>%
+        rename(ID_Part=ID_T30)
+
+########Einzelteil31######
+Einzelteil31 <- read_file("Data/Einzelteil/Einzelteil_T31.txt")%>%
+        str_replace_all(.,"\t", ";")%>%
+        str_replace_all(., "\b" ,"\n")%>%
+        fread(text= .)%>%
+        as_tibble()%>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  select(-Produktionsdatum_Origin_01011970,-origin, -X1, -V1)
+  
+  #mutate(ID_T31 = mapply( ID_T31, FUN = correctionFunction))%>%
+
+
+K4_T31 <- K4%>%
+        inner_join(Einzelteil31, by= c("ID_T31" = "ID_T31"), suffix = c("_Component", "_Part"))%>%
+        select( -ID_T30, -ID_T32)%>%
+        rename(ID_Part=ID_T31)
+
+###########Einzelteil32#####
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T32.csv")
+Einzelteil32 <- read_csv2("Data/Einzelteil/Einzelteil_T32.csv")%>%
+        mutate(ID_T32 = coalesce ( ID_T32.x, ID_T32.y),  
+               Produktionsdatum = coalesce(Produktionsdatum.x, Produktionsdatum.y),
+       Produktionsdatum = as.Date(as.POSIXct(Produktionsdatum, "%Y-%m-%d")),
+       Herstellernummer = coalesce(Herstellernummer.x, Herstellernummer.y),
+       Werksnummer = coalesce(Werksnummer.x, Werksnummer.y),
+       Fehlerhaft = coalesce(Fehlerhaft.x, Fehlerhaft.y),
+       Fehlerhaft_Datum = coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d")),
+       Fehlerhaft_Fahrleistung = coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y)) %>%
+  select(17:23)%>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31"))
+
+        #mutate(ID_T32 = mapply(ID_T32, FUN =correctionFunction))%>%
+
+
+K4_T32 <- K4%>%
+        inner_join(Einzelteil32, by= c("ID_T32" = "ID_T32"), suffix = c("_Component", "_Part"))%>%
+        select(-ID_T30, -ID_T31)%>%
+  rename(ID_Part=ID_T32)
+
+
+K4_Parts <- K4_T30 %>%
+        bind_rows(K4_T31)%>%
+  bind_rows(K4_T32)
+
+#delete
+rm(K4_T30,K4_T31,K4_T32,K4)
+
+```
+
+#### K5: VehiclesBody
+```{r message=FALSE, warning=FALSE}
+Delim <- reader::get.delim("Data/Komponente/Bestandteile_Komponente_K5.csv")
+Componentspart_K5<-read_csv2("Data/Komponente/Bestandteile_Komponente_K5.csv") %>% 
+  select(5,2:4)
+
+Delim <- reader::get.delim("Data/Komponente/Komponente_K5.csv")
+Faulty_K5 <- read_csv("Data/Komponente/Komponente_K5.csv") %>%
+  mutate(ID_Karosserie = coalesce( ID_Karosserie.x, ID_Karosserie.y),  
+         Herstellernummer=coalesce( Herstellernummer.x, Herstellernummer.y),
+         Werksnummer=coalesce( Werksnummer.x, Werksnummer.y),
+         Fehlerhaft=coalesce(Fehlerhaft.x, Fehlerhaft.y),
+         Fehlerhaft_Datum=coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+         Fehlerhaft_Fahrleistung=coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y),
+         Production_Date = coalesce( Produktionsdatum.x, Produktionsdatum.y))%>%
+  filter(Fehlerhaft == 1,Production_Date >= as.Date("2014-01-01"),Production_Date <=as.Date("2016-12-31")) %>% 
+  select(ID_Karosserie,Herstellernummer,Werksnummer,Fehlerhaft,Fehlerhaft_Datum,Fehlerhaft_Fahrleistung,Production_Date)
+        
+
+K5 <- Faulty_K5%>%
+        inner_join(Component_Vehicles, c("ID_Karosserie"="ID_Karosserie"))%>%
+        select(-ID_Schaltung, -ID_Motor, -ID_Sitze)%>%
+        inner_join(Componentspart_K5,c("ID_Karosserie"="ID_K5"))%>%
+        select(ID_Fahrzeug,ID_Karosserie, Fehlerhaft, ID_T30, ID_T31, ID_T33)%>%
+  rename(ID_Component = ID_Karosserie)
+
+#delete unnecessary data
+rm(Faulty_K5,Componentspart_K5)
+
+K5_T30 <- K5%>%
+        inner_join(Einzelteil30, by= c("ID_T30" = "ID_T30"), suffix = c("_Component", "_Part"))%>%
+        select(-ID_T31, -ID_T33)%>%
+  rename(ID_Part=ID_T30)
+
+
+K5_T31 <- K5%>%
+        inner_join(Einzelteil31, by= c("ID_T31" = "ID_T31"), suffix = c("_Component", "_Part"))%>%
+        select( -ID_T30, -ID_T33)%>%
+  rename(ID_Part=ID_T31)
+
+###########Einzelteil33#######
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T33.csv")
+Einzelteil33 <- read_csv("Data/Einzelteil/Einzelteil_T33.csv")%>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  select(-Produktionsdatum_Origin_01011970,-origin, -X1, -X1_1)
+        #mutate(ID_T33 = mapply(ID_T33, FUN =correctionFunction))%>% 
+
+
+K5_T33 <- K5%>%
+        inner_join(Einzelteil33, by= c("ID_T33" = "ID_T33"), suffix = c("_Component", "_Part"))%>%
+        select(-ID_T30, -ID_T31)%>%
+  rename(ID_Part=ID_T33)
+
+
+K5_Parts <- K5_T30 %>%
+  bind_rows(K5_T31)%>%
+  bind_rows(K5_T33)
+
+#delete
+rm(K5_T30,K5_T31,K5_T33,K5)
+
+```
+
+#### K6: VehiclesBody
+```{r message=FALSE, warning=FALSE}
+Delim <- reader::get.delim("Data/Komponente/Bestandteile_Komponente_K6.csv")
+Componentspart_K6<-read_csv2("Data/Komponente/Bestandteile_Komponente_K6.csv") %>% 
+  select(6,2:5)
+
+Delim <- reader::get.delim("Data/Komponente/Komponente_K6.csv")
+Faulty_K6 <- read_csv2("Data/Komponente/Komponente_K6.csv") %>%
+  mutate(Production_Date = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")))%>%
+  filter(Fehlerhaft == 1,Production_Date >= as.Date("2014-01-01"),Production_Date <=as.Date("2016-12-31")) %>% 
+  select(-X1,-X1_1,-Produktionsdatum_Origin_01011970,-origin)
+
+K6 <- Faulty_K6%>%
+        inner_join(Component_Vehicles, c("ID_Karosserie"="ID_Karosserie"))%>%
+        select(-ID_Schaltung, -ID_Motor, -ID_Sitze)%>%
+        inner_join(Componentspart_K6,c("ID_Karosserie"="ID_K6"))%>%
+        select(ID_Fahrzeug,ID_Karosserie, Fehlerhaft, ID_T34, ID_T35, ID_T36, ID_T37)%>%
+        rename(ID_Component = ID_Karosserie)
+
+#delete unnecessary data
+rm(Faulty_K6,Componentspart_K6)
+
+############Einzelteil34#########
+Einzelteil34 <- read_file("Data/Einzelteil/Einzelteil_T34.txt")%>%
+        str_replace_all(.," \\| \\| ", ";")%>%
+        str_replace_all(., "\"\"" ,"\n")%>%
+        str_remove_all(., "\"")%>%
+        fread(text= .)%>%
+        as_tibble()%>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  select(-Produktionsdatum_Origin_01011970,-origin, -X1, -V1)
+        #mutate(ID_T34= mapply(ID_T34, FUN=correctionFunction))%>%
+
+
+K6_T34 <- K6%>%
+        inner_join(Einzelteil34, by= c("ID_T34" = "ID_T34"), suffix = c("_Component", "_Part"))%>%
+        select(-ID_T35, -ID_T36, -ID_T37)%>%
+  rename(ID_Part=ID_T34)
+
+###############Eintzelteil35########
+Einzelteil35 <- read_file("Data/Einzelteil/Einzelteil_T35.txt")%>%
+        str_replace_all(., "\\\\", ";")%>%
+        str_replace_all(. , "\"\"", "\n")%>%
+        str_replace_all(. , "NA\"", "\n")%>%
+        str_remove_all(., "\"") %>%
+        fread(text = .)%>%
+        as_tibble()%>%
+        mutate(ID_T35 = coalesce( ID_T35.x, ID_T35.y),
+               Produktionsdatum = coalesce(Produktionsdatum.x, Produktionsdatum.y),
+       Produktionsdatum = as.Date(as.POSIXct(Produktionsdatum, "%Y-%m-%d")),
+       Herstellernummer = coalesce(Herstellernummer.x, Herstellernummer.y),
+       Werksnummer = coalesce(Werksnummer.x, Werksnummer.y),
+       Fehlerhaft = coalesce(Fehlerhaft.x, Fehlerhaft.y),
+       Fehlerhaft_Datum = coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d")),
+       Fehlerhaft_Fahrleistung = coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y)) %>%
+  select(17:23)%>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31"))
+
+        #mutate(ID_T35= mapply(ID_T35, FUN=correctionFunction))%>%
+
+
+
+K6_T35 <- K6%>%
+        inner_join(Einzelteil35, by= c("ID_T35" = "ID_T35"), suffix = c("_Component", "_Part"))%>%
+        select( -ID_T34, -ID_T36,-ID_T37)%>%
+  rename(ID_Part=ID_T35)
+
+################Einzelteil36#########
+Einzelteil36 <- read_file("Data/Einzelteil/Einzelteil_T36.txt")%>%
+        str_replace_all(.,"  ", ";")%>%
+        str_replace_all(., " " ,"\n")%>%
+        fread(text= .)%>%
+        as_tibble() %>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  select(-Produktionsdatum_Origin_01011970,-origin, -X1, -V1)
+        #mutate(ID_T36= mapply(ID_T36, FUN=correctionFunction))%>%
+        
+
+K6_T36 <- K6%>%
+        inner_join(Einzelteil36, by= c("ID_T36" = "ID_T36"), suffix = c("_Component", "_Part"))%>%
+        select(-ID_T34, -ID_T35, -ID_T37)%>%
+  rename(ID_Part=ID_T36)
+
+###############Einzelteil37############
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T37.csv")
+Einzelteil37 <- read_csv("Data/Einzelteil/Einzelteil_T37.csv")%>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  select(-Produktionsdatum_Origin_01011970,-origin, -X1, -X1_1)
+
+        #mutate(ID_T37 = mapply(ID_T37, FUN =correctionFunction))%>%
+
+K6_T37 <- K6%>%
+        inner_join(Einzelteil37, by= c("ID_T37" = "ID_T37"), suffix = c("_Component", "_Part"))%>%
+        select(-ID_T34, -ID_T35, -ID_T36)%>%
+  rename(ID_Part=ID_T37)
+
+
+K6_Parts <- K6_T34 %>%
+  bind_rows(K6_T35)%>%
+  bind_rows(K6_T36) %>%
+  bind_rows(K6_T37)
+
+rm(K6_T34,K6_T35,K6_T36,K6_T37)
+```
+
+#### K7: VehiclesBody
+```{r message=FALSE, warning=FALSE}
+Delim <- reader::get.delim("Data/Komponente/Bestandteile_Komponente_K7.csv")
+Componentspart_K7<-read_csv2("Data/Komponente/Bestandteile_Komponente_K7.csv") %>% 
+  select(7,2:6)
+
+Faulty_K7 <- read_file("Data/Komponente/Komponente_K7.txt")%>%
+  str_replace_all(.,"\t", ";")%>%
+  str_replace_all(.,"\r","\n")%>%
+  fread(text= .)%>%
+  as_tibble()%>% 
+  mutate(Production_Date = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")))%>%
+  filter(Fehlerhaft == 1,Production_Date >= as.Date("2014-01-01"),Production_Date <=as.Date("2016-12-31")) %>% 
+  select(-X1,-V1,-Produktionsdatum_Origin_01011970,-origin)
+
+K7 <- Faulty_K7%>%
+  inner_join(Component_Vehicles, c("ID_Karosserie"="ID_Karosserie"))%>%
+  select(-ID_Sitze, -ID_Schaltung, -ID_Motor)%>%
+  inner_join(Componentspart_K7,c("ID_Karosserie"="ID_K7"))%>%
+  select(ID_Fahrzeug,ID_Karosserie, Fehlerhaft, ID_T34, ID_T35, ID_T38, ID_T39, ID_T40)
+
+#delete unnecessary data
+rm(Faulty_K7,Componentspart_K7)
+
+
+K7_T34 <- K7%>%
+  inner_join(Einzelteil34, by= c("ID_T34" = "ID_T34"), suffix = c("_Karosserie", "_T34"))%>%
+  select(-ID_T35, -ID_T39, -ID_T38, -ID_T40)
+
+K7_T35 <- K7%>%
+  inner_join(Einzelteil35, by= c("ID_T35" = "ID_T35"), suffix = c("_Karosserie", "_T35"))%>%
+  select(-ID_T34, -ID_T38, -ID_T39, -ID_T40)
+
+#########Einzelteil38##########
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T38.csv")
+Einzelteil38 <- read_csv("Data/Einzelteil/Einzelteil_T38.csv")%>%
+                mutate(ID_T38 = coalesce( ID_T38.x, ID_T38.y),
+                Produktionsdatum = coalesce(Produktionsdatum.x, Produktionsdatum.y),
+       Produktionsdatum = as.Date(as.POSIXct(Produktionsdatum, "%Y-%m-%d")),
+       Herstellernummer = coalesce(Herstellernummer.x, Herstellernummer.y),
+       Werksnummer = coalesce(Werksnummer.x, Werksnummer.y),
+       Fehlerhaft = coalesce(Fehlerhaft.x, Fehlerhaft.y),
+       Fehlerhaft_Datum = coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d")),
+       Fehlerhaft_Fahrleistung = coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y)) %>%
+  select(17:23) %>% 
+    filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31"))
+
+
+  #mutate(ID_T38 = mapply(ID_T38, FUN =correctionFunction))%>%
+              
+
+K7_T38 <- K7%>%
+  inner_join(Einzelteil38, by= c("ID_T38" = "ID_T38"), suffix = c("_Karosserie", "_T38"))%>%
+  select(-ID_T34, -ID_T35, -ID_T39, -ID_T40)
+
+##########Einzelteil39#######
+Einzelteil39 <- read_file("Data/Einzelteil/Einzelteil_T39.txt")%>%
+  str_replace_all(.,"\\\\", ";")%>%
+  str_replace_all(., "\a" ,"\n")%>%
+  fread(text= .)%>%
+  as_tibble()%>%
+  mutate(ID_T39 = coalesce( ID_T39.x, ID_T39.y),
+         Produktionsdatum = coalesce(Produktionsdatum.x, Produktionsdatum.y),
+       Produktionsdatum = as.Date(as.POSIXct(Produktionsdatum, "%Y-%m-%d")),
+       Herstellernummer = coalesce(Herstellernummer.x, Herstellernummer.y),
+       Werksnummer = coalesce(Werksnummer.x, Werksnummer.y),
+       Fehlerhaft = coalesce(Fehlerhaft.x, Fehlerhaft.y),
+       Fehlerhaft_Datum = coalesce(Fehlerhaft_Datum.x, Fehlerhaft_Datum.y),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d")),
+       Fehlerhaft_Fahrleistung = coalesce(Fehlerhaft_Fahrleistung.x, Fehlerhaft_Fahrleistung.y)) %>%
+  select(17:23)%>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31"))
+
+  #mutate(ID_T39= mapply(ID_T39, FUN=correctionFunction))%>%
+
+
+K7_T39 <- K7%>%
+  inner_join(Einzelteil39, by= c("ID_T39" = "ID_T39"), suffix = c("_Karosserie", "_T39"))%>%
+  select(-ID_T34, -ID_T35, -ID_T38, -ID_T40)
+
+##########Einzelteil40#########
+Delim <- reader::get.delim("Data/Einzelteil/Einzelteil_T40.csv")
+Einzelteil40 <- read_csv2("Data/Einzelteil/Einzelteil_T40.csv")%>%
+  mutate(Produktionsdatum = as.Date(as.POSIXlt.Date(Produktionsdatum_Origin_01011970, origin ="1970-01-01")),
+       Fehlerhaft_Datum = as.Date(as.POSIXct(Fehlerhaft_Datum, "%Y-%m-%d"))) %>%
+  filter(Fehlerhaft == 1,Produktionsdatum >= as.Date("2014-01-01"),Produktionsdatum <=as.Date("2016-12-31")) %>% 
+  select(-Produktionsdatum_Origin_01011970,-origin, -X1, -X1_1)
+  #mutate(ID_T40 = mapply(ID_T40, FUN =correctionFunction))%>%
+
+
+K7_T40 <- K7%>%
+  inner_join(Einzelteil40, by= c("ID_T40" = "ID_T40"), suffix = c("_Karosserie", "_T40"))%>%
+  select(-ID_T34, -ID_T35, -ID_T38, -ID_T39)
+
+K7_Parts <- K7_T34 %>%
+  inner_join(K7_T35)%>%
+  inner_join(K7_T38)%>%
+  inner_join(K7_T39)%>%
+  inner_join(K7_T40)
+
+#rm(K7_T34,K7_T35,K7_T38,K7_T39,K7_T40,K7)
+```
+
+## Combining components with their parts
+```{r message=FALSE, warning=FALSE}
+All_Components <- bind_rows(K1BE1_Parts,K1BE2_Parts,K1DI1_Parts, K1DI2_Parts,K2LE1_Parts, K2LE2_Parts,K2ST1_Parts, K2ST2_Parts, K3AG2_Parts,K3SG1_Parts,K3SG2_Parts,K4_Parts,K5_Parts,K6_Parts,K7_Parts)
+```
+
+### Vehicle Faulty Dataset for Componente
+```{r}
+VehicleError <- unique(inner_join(Registration_Vehicle_Faulty, All_Components, c("ID_Vehicle"= "ID_Fahrzeug")))%>%
+  arrange(ID_Vehicle)%>%
+  mutate(Vehicle_Type = ifelse(substr(ID_Vehicle,1,1)==1,1,2))
+
+```
+

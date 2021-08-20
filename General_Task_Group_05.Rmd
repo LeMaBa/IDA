@@ -1,0 +1,204 @@
+---
+title: "General_Task_Group05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+if(!require(install.load)){
+  install.packages("install.load")
+  library(install.load)
+}
+install_load("tidyverse","lubridate","plotly", "ggplot2" ,"knitr")
+```
+
+## Task 1 Delay of K7
+Describtion of Task ...
+
+
+### Import Data
+For the analysis the delay, the data needs to be imported. and the delay calculateted
+
+```{r}
+K7<-read.delim("Data/Logistikverzug/Komponente_K7.csv",sep=";")%>% mutate(Produktionsdatum=ymd(Produktionsdatum))
+Delay<-read.delim("Data/Logistikverzug/Logistikverzug_K7.csv",sep=",")%>%
+  mutate(Wareneingang=ymd(Wareneingang))
+
+```
+### Combine 
+The imported Tables will be combined and the delay will be calculated
+
+```{r}
+Logistic_Delay<-K7[-1]%>%inner_join(Delay[-1],by=c("IDNummer","Herstellernummer","Werksnummer"),suffix=c("_K","_D")) %>%
+  mutate(LDelay=as.numeric(Wareneingang-Produktionsdatum-1))
+```
+
+### Summary of Calculation
+Die durchschnittliche Verzögerung berechnet sich zu `r round(mean(Logistic_Delay$LDelay),2)` Tagen.
+Die minimale Verzögerung ergibt sich zu `r min(Logistic_Delay$LDelay)` Tagen und die maxiamle Verzögerung ergibt sich zu `r max(Logistic_Delay$LDelay)` Tagen.
+
+### Plot the Histogramm
+```{r}
+
+
+#normale<-data.frame(nbr = round( 
+#                            rnorm(
+#                              as.integer(count(Logistic_Delay))*1.05,    #calc count the times of delay, multi with 1.05
+#                                      mean(Logistic_Delay$LDelay)-0.16,  #calc mean of delay, minus ....
+#                                      sd(Logistic_Delay$LDelay)          #calc standard diviation of delay
+#                                  )
+#                              )
+#                    )
+
+figure<-plot_ly(Logistic_Delay,x=~LDelay,type="histogram", alpha=1, name="Reale Werte")
+#figure<- figure %>% add_histogram(data=normale, x=~nbr,alpha=0.6,name="Gerundete Normalverteilung") #not nessary
+figure <- figure %>% layout(barmode="overlay") %>% layout(legend = list(x = 0.5, y = 0.9))
+figure
+
+#Histogramm Plot with ggplot2
+#ggplot(data = NULL)+
+#  geom_histogram(data = Logistic_Delay, aes(x = LDelay), alpha = 0.4, binwidth=1, color="red", fill="red")+
+#  geom_vline(data=Logistic_Delay, aes(xintercept=mean(LDelay), color="red"), linetype="dashed")+
+#  geom_histogram(data = normale, aes(x = nbr), alpha = 0.8, binwidth=1,color="lightblue", fill="lightblue")+
+#  geom_vline(data=normale, aes(xintercept=mean(nbr), color="blue"), linetype="dashed")+
+#  xlab("Delay in Days")+
+#  ylab("Number of Parts")+
+#  theme_bw()
+
+
+```
+###Testing for Distributiontyp
+Possible distributiontyps:
+Poissonverteilung
+Binomialverteilung
+Normalverteilung
+logische Verteiung
+Exponentialverteilung
+
+Test Algorithmus: Kolmogorov-Smirnov-Test
+
+### Calc the distribution
+```{r, warning=FALSE}
+#Es ist keine Poissonverteilung
+poissonValue <- ks.test(Logistic_Delay$LDelay,"ppois",mean(Logistic_Delay$LDelay))
+#Es ist keine Binominalverteilung
+binomValue <- ks.test(Logistic_Delay$LDelay,"pbinom",10,0.889)
+
+#Es idt keine gerundete Normalverteilung
+normValue <- ks.test(Logistic_Delay$LDelay,round(rnorm(100000,mean(Logistic_Delay$LDelay),sd(Logistic_Delay$LDelay))))
+norm_Value <- ks.test(Logistic_Delay$LDelay,round(rnorm(100000,mean(Logistic_Delay$LDelay)-0.15,sd(Logistic_Delay$LDelay))))
+
+#Es ist keine gerundete Logistische Verteilung
+logistValue <- ks.test(Logistic_Delay$LDelay,round(rlogis(1000,mean(Logistic_Delay$LDelay),sd(Logistic_Delay$LDelay)^2*pi^2/3)))
+
+#Es ist keine gerundete Exponentialverteilung
+expValue <- ks.test(Logistic_Delay$LDelay,round(rexp(1000,1/mean(Logistic_Delay$LDelay))))
+
+```
+
+### sumary Cals Distribution
+Es handlet sich nicht um eine gerundete Normalverteilung, da p= `r as.integer(normValue$p.value) ` < 0.05 ist und damit der Kolmogorov-Smirnov-Test aussagt, dass die Daten nicht aus der Verteilung stammen. Dies gilt ebenso für die Poissonverteilung (p=`r as.integer(poissonValue$p.value) `), Binominalverteilung (p=`r as.integer(binomValue$p.value) `), die gerundete logistische Verteilung (p=`r as.integer(logistValue$p.value) `) und die gerundete Exponentialverteilung(p=`r as.integer(expValue$p.value) `).
+
+Es wurden außerdem noch die folgenden Verteilungen aufgrund von optischen Vergleichen mit den gegebenen Daten zum Beispiel verworfen: Geometrische Verteilung, Logarithmische Verteilung, Yule-Simon-Distribution, die Bernoulli-Verteilung und noch einige mehr.
+Zusätzlich wurde die negative Biominalverteilung verworfen, da bei ihr immer die Varianz größer ist als der Erwartungswert.
+
+### Summary task 1
+
+
+## Task 2 - Pro/Con ER Database
+###Why does it make sense to store the data provided to you in separate files and not store everything in one huge table? What is the 
+
+Es handelt sich um eine relationale Datenbank.
+
+Why does it make sense to store the data provided to you in separate files and not store everything in one huge table? 
+
+Die Vorteile einer relationalen Datenbank bestehen in:
+
+Beim Arbeiten mit einer Teilmenge der Daten muss nicht die gesamte Datenmenge geladen werden. Dadurch reduziert sich die erforderliche Rechenzeit und die Arbeitsspeichernutzung.
+
+Durch sinnvoll benannte Tabellen kann eine höhere Übersichtlichkeit der Position von Informationen in der Datenbank und der gesamten Informationsmenge in der Datenbank erreicht werden.
+
+In einer relationalen Datenbank können Mehrfachspeicherungen von Daten, aufgrund von der Relation von mehreren Einträgen auf einen Datenpunkt, reduziert werden. Damit kann der benötigte Speicherplatz der Datenbank reduziert werden.
+
+Reltionale Datenbanken können bei sinnvoller Benennung der zur relationalen Zuordnung verwendeten Einträge die Fehlersuche vereinfachen. Dies trat auch schon mit den Teilnummern und den Fabriknummern in der ersten Aufgabe auf.
+
+
+
+## Task 3 - Number of Party with "K7" in vehicles in Dahlem(Eifel)
+
+```{r}
+Zulassung<-read.delim("Data/Zulassungen/Zulassungen_alle_Fahrzeuge.csv",sep=";")
+Stadt <- Zulassung %>% filter(Gemeinden == "Dahlem (Eifel)")
+
+Fahrzeuge1<-read.delim("Data/Fahrzeug/Bestandteile_Fahrzeuge_OEM1_Typ12.csv",sep=";")
+Fahrzeuge2<-read.delim("Data/Fahrzeug/Bestandteile_Fahrzeuge_OEM1_Typ11.csv",sep=";")
+Fahrzeuge3<-read.delim("Data/Fahrzeug/Bestandteile_Fahrzeuge_OEM2_Typ21.csv",sep=";")
+Fahrzeuge4<-read.delim("Data/Fahrzeug/Bestandteile_Fahrzeuge_OEM2_Typ22.csv",sep=";")
+Fahrzeuge<-bind_rows(Fahrzeuge1,Fahrzeuge2,Fahrzeuge3,Fahrzeuge4)
+
+Zusammenfuehrung<-left_join(Fahrzeuge[-c(1,3:5,7)],Zulassung[-1],by=c("ID_Fahrzeug"="IDNummer"))
+Dahlem <- Zusammenfuehrung %>% filter(Gemeinden =="Dahlem (Eifel)") %>% filter(substr(ID_Karosserie,1,1)=="7")
+
+```
+There are `r as.integer(count(Stadt))` cars registered in the Area of "Dahlem (Eifel)", within these Cars there are `r as.integer(count(Dahlem))` cars build with the component K7.
+
+
+## Task 4 - Which data types do the attributes of the registration table “Zulassungen_aller_Fahrzeuge” have?
+
+```{r}
+Zulassung<-read.delim("Data/Zulassungen/Zulassungen_alle_Fahrzeuge.csv",sep=";")
+Tabelle_Klassen<-Zulassung[0,] #Hinzufügen der Titel zu der Tabelle
+n<-1 #Zählende Variable
+while(n<=length(Zulassung)){
+  Tabelle_Klassen[1,n]<-as.character(class(Zulassung[,n])) 
+  #Bestimmung der Klasse einer Zeile und diese in die Tabelle einfügen
+  n<-n+1
+  
+}
+library(knitr)
+  kable(Tabelle_Klassen,caption = "Tabelle der Klassen der Tabelle Zulassung")
+```
+
+## Task 5 - Pro's using a Server
+### Why does it make sense to store the records on the database of a server? 
+
+###Why can’t you store the records on your personal computer? 
+
+###What is an easy way to make your application available to your customers? Please name 5 aspects.
+
+
+
+Vorteile der Nutzung eines Server:
+
+Die Einrichtung des Zugangs auf die Web-Application ist relativ einfach.
+
+Das standartisierte Datenbankinterface am Server erleichtert potentielle weitere Nutzung der Daten.
+
+Bei Problemen kann ein identisch funktionierender Server leicht durch z.B. Mieten organisiert werden.
+
+
+Nachteile der Daten auf dem persönlichen Computer:
+
+Der dauerhafter Bertieb des Computers während dem Betrieb der Anwendung ist notwenig.
+
+Es können potentielle Sicherheitsprobleme bei "freiem" Zugriff von Aussen auf den persönlichen Computer auftreten.
+
+Der dauerhafte Zugriff auf die Daten reduziert die für andere Prozesse nutzbare Rechenleistung, Arbeitsspeicher und Netzwerknutzung.
+
+
+## Task 6 - Hit'n Run 
+Desciption of Task and steps to take
+
+```{r}
+Zulassung<-read.delim("Data/Zulassungen/Zulassungen_alle_Fahrzeuge.csv",sep=";")
+Fahrzeuge1<-read.delim("Data/Fahrzeug/Bestandteile_Fahrzeuge_OEM1_Typ12.csv",sep=";")
+Fahrzeuge2<-read.delim("Data/Fahrzeug/Bestandteile_Fahrzeuge_OEM1_Typ11.csv",sep=";")
+Fahrzeuge3<-read.delim("Data/Fahrzeug/Bestandteile_Fahrzeuge_OEM2_Typ21.csv",sep=";")
+Fahrzeuge4<-read.delim("Data/Fahrzeug/Bestandteile_Fahrzeuge_OEM2_Typ22.csv",sep=";")
+Fahrzeuge<-bind_rows(Fahrzeuge1,Fahrzeuge2,Fahrzeuge3,Fahrzeuge4)
+Zusammenfuehrung<-left_join(Fahrzeuge[-c(1,3:5,7)],Zulassung[-1],by=c("ID_Fahrzeug"="IDNummer"))
+Auto<-Zusammenfuehrung%>%filter(ID_Karosserie=="K5-112-1122-79")
+```
+### Summary
+Die zugehörige Zulassungsstelle befindet sich in `r Auto$Gemeinden`.
+
